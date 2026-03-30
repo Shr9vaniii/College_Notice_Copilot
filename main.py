@@ -1,35 +1,25 @@
-import os
-from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import SystemMessage,HumanMessage,AIMessage
-from ingestion import get_college_retriever,extract_text_from_pdf,add_text
-from chromadb import CloudClient
-import pdfplumber
-from PIL import Image
-import pytesseract
-from pdf2image import convert_from_path
-from ingestion import get_text_processed
-from google import genai
-from ingestion import client,extract_text_from_pdf
+from fastapi import FastAPI
+from pydantic import BaseModel
+import time
 
+from chatbot import api_question_answer
 
+app = FastAPI()
 
-load_dotenv(override=True)
+class QueryRequest(BaseModel):
+    query: str
+    college_name: str = "default"
 
-GEMINI_API_KEY=os.getenv('GEMINI_API_KEY')
+@app.post("/query")
+def query_rag(req: QueryRequest):
+    start = time.time()
 
-def main():
-    print("Hello from college-chatbot!")
-    pdf_path="insem_tt.pdf"
-    extract_text_from_pdf(pdf_path,'pict',client)
-    
+    answer = api_question_answer(req.query, req.college_name)
 
-      
-    
-   
+    end = time.time()
 
-
-    
-
-if __name__ == "__main__":
-    main()
+    return {
+        "query": req.query,
+        "answer": answer,
+        "latency": round(end - start, 3)
+    }
