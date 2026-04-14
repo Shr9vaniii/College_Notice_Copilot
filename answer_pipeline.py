@@ -1,29 +1,41 @@
 import os
 from dotenv import load_dotenv
-from chromadb import CloudClient
+from chromadb import HttpClient,CloudClient
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from ingestion import get_college_retriever
 from pydantic import BaseModel,Field
 from openai import OpenAI
+from sentence_transformers import CrossEncoder
+import time
+from groq import Groq
+from chromadb.config import Settings
+
+
+
+# load once globally
+reranker_model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 
 load_dotenv(override=True)
 
+client1 = Groq()
+
 chroma_api=os.getenv('CHROMA_API_KEY')
 
-client = CloudClient(
-    api_key=chroma_api,
-    tenant='246553cc-048a-47fa-aa2a-cf9d61280656',
-    database='Project'
-    )
 
-gemini_api_key = os.getenv("GEMINI_API_KEY")
-gemini_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+client = CloudClient(
+        api_key=chroma_api,
+        tenant="246553cc-048a-47fa-aa2a-cf9d61280656",
+        database="Project"
+    )
+    # This line will confirm if the connection is ACTUALLY alive
+
+
+
 MODEL = "gemini-2.5-flash"
 
 llm=ChatGoogleGenerativeAI(model=MODEL,temperature=0)
 
-llm2=OpenAI(api_key=gemini_api_key,base_url=gemini_url)
 AVERAGE_CHUNK_SIZE = 500
 DEFAULT_RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "10"))
 
@@ -45,6 +57,7 @@ class CollegeChatbot:
     def __init__(self):
         self.client = client
         self.llm = llm
+        self.llm2=client1
         
        
         self.AVERAGE_CHUNK_SIZE = AVERAGE_CHUNK_SIZE
@@ -65,50 +78,66 @@ class CollegeChatbot:
                 merged.append(chunk)
         return merged
 
-    def rerank(self,question, chunks):
-        system_prompt = """
-    You are a document re-ranker.
-    You are provided with a question and a list of relevant chunks of text from a query of a knowledge base.
-    The chunks are provided in the order they were retrieved; this should be approximately ordered by relevance, but you may be able to improve on that.
-    You must rank order the provided chunks by relevance to the question, with the most relevant chunk first.
-    Reply only with the list of ranked chunk ids, nothing else. Include all the chunk ids you are provided with, reranked.
-    """
-        user_prompt = f"The user has asked the following question:\n\n{question}\n\nOrder all the chunks of text by relevance to the question, from most relevant to least relevant. Include all the chunk ids you are provided with, reranked.\n\n"
-        user_prompt += "Here are the chunks:\n\n"
-        for index, chunk in enumerate(chunks):
-            user_prompt += f"# CHUNK ID: {index + 1}:\n\n{chunk.page_content}\n\n"
-        user_prompt += "Reply only with the list of ranked chunk ids, nothing else."
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-        response = llm2.chat.completions.parse(model=MODEL,messages=messages, response_format=RankOrder)
-        reply = response.choices[0].message.content
-        order = RankOrder.model_validate_json(reply).order
-        return [chunks[i - 1] for i in order]        
+ 
+    def rerank(self, question, chunks):
+        # prepare (query, chunk) pairs
+        pairs = [(question, chunk.page_content) for chunk in chunks]
+
+        # get scores
+        scores = reranker_model.predict(pairs)
+        ranked_by_semantic=list(zip(chunks, scores))
+
+        # sort by score descending
+        ranked = sorted(
+            ranked_by_semantic,
+            key=lambda x: (
+            x[1],
+            x[0].metadata.get("upload_date", 0)
+            ),
+            reverse=True
+        )
+
+        # return top_k chunks
+        return [chunk for chunk, _ in ranked]        
 
 
-    def query_rewriting(self, query, history=[]):
-            system_msg=f'''You are an excellent query_rewriter. You are provided with the user question and the history.
+    def query_rewriting(self, query, history):
+        
+        system_msg = f'''You are an excellent query_rewriter. You are provided with the user question and the history.
             Create a standalone, explicit query.
             Respond only with a short, refined question that you will use to search the Knowledge Base.
             It should be a VERY short specific question most likely to surface content. Focus on the question details.
             IMPORTANT: Respond ONLY with the precise knowledgebase query, nothing else.
             '''
-            user_msg=f'''
+        user_msg = f'''
             This is the history of your conversation so far with the user:
             {history}
 
             And this is the user's current question:
             {query}'''
 
-            rewritten_query=self.llm.invoke([SystemMessage(content=system_msg),HumanMessage(content=user_msg)])
-            return rewritten_query.content  
+        rewritten_query = self.llm2.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0,
+        )
+
+        return rewritten_query.choices[0].message.content
 
     def fetch_context_unranked(self, question, college_name, k: int = DEFAULT_RETRIEVAL_K):
-        retriever = get_college_retriever(college_name, self.client, k=k)
+        t0=time.time()
+        retriever = get_college_retriever(college_name, self.client, k=10)
+        t1=time.time()
         context=retriever.invoke(question)
+        t2=time.time()
         chunks=[]
+        print({
+        "retriever_creation": t1 - t0,
+        "invoke_time": t2 - t1
+       })
         for chunk in context:
             chunks.append(
                 Result(
@@ -119,12 +148,27 @@ class CollegeChatbot:
         return chunks
 
     def fetch_context(self,college_name,original_question,history):
-        rewritten_query=self.query_rewriting(original_question,history)   
-        chunk1=self.fetch_context_unranked(original_question,college_name)
+        start=time.time()
+        rewritten_query=self.query_rewriting(original_question,history)  
+        t1=time.time() 
+        
         chunk2=self.fetch_context_unranked(rewritten_query,college_name)
-        merged=self.merge_chunks(chunk1,chunk2)
-        reranked=self.rerank(rewritten_query,merged)
-        return reranked[:FINAL_K]
+        
+        t2=time.time()
+        reranked=self.rerank(rewritten_query,chunk2)
+        top_semantic=reranked[:8]
+        t3=time.time()
+        final_context=sorted(
+            top_semantic,
+            key=lambda x: x.metadata.get("upload_date", "2026-01-01 00:00"),
+            reverse=True
+        )
+        print({
+            "query rewriting":t1-start,
+            "fetching context unranked":t2-t1,
+            "reranking":t3-t2
+        })
+        return final_context[:3]
 
 
     
