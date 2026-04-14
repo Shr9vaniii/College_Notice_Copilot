@@ -6,6 +6,8 @@ import os
 from dotenv import load_dotenv
 import chromadb
 from answer_pipeline import client, CollegeChatbot, Result
+import re
+
 
 chat=CollegeChatbot()
 
@@ -15,19 +17,22 @@ load_dotenv(override=True)
 # REDIS CLOUD CONNECTION
 # =========================
 
-REDIS_HOST = os.getenv("REDIS_HOST")
-REDIS_PORT = os.getenv("REDIS_PORT")
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
 
-r = redis.Redis(
-    host=REDIS_HOST,
-    port=REDIS_PORT,
-    password=REDIS_PASSWORD,
-    ssl=False,              
-    decode_responses=False
-)
 
-print("Redis ping:", r.ping())
+def deep_clean(value):
+    if not value: return ""
+    return re.sub(r'\s+', '', value)
+
+REDIS_HOST = deep_clean(os.getenv("REDIS_HOST"))
+REDIS_PORT = deep_clean(os.getenv("REDIS_PORT"))
+REDIS_PASSWORD = deep_clean(os.getenv("REDIS_PASSWORD"))
+
+# Ensure there is NO space around the colon here
+REDIS_URL = f"redis://default:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}"
+
+print(f"DEBUG: Final URL Check: |{REDIS_URL}|") # The pipes | show if spaces remain
+
+r = redis.from_url(REDIS_URL, decode_responses=True)
 
 
 # =========================
@@ -143,9 +148,9 @@ def get_retrieval(question, cid):
 def get_rerank(question, cid, history):
 
     # Use rewritten query for caching so history-aware semantics are cached
-    rewritten = chat.query_rewriting(question, history or [])
+    
 
-    q = normalize(rewritten)
+    q = normalize(question)
     h = sha1(q)
 
     kb_ver = get_version(f"kb:ver{cid}")
