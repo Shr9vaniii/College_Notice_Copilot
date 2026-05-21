@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 import chromadb
 from answer_pipeline import client, CollegeChatbot, Result
 import re
+from sentence_transformers import SentenceTransformer
 
 
 chat=CollegeChatbot()
@@ -78,7 +79,7 @@ def get_version(key):
 # EMBEDDING MODEL
 # =========================
 
-from sentence_transformers import SentenceTransformer
+
 
 embed_model = SentenceTransformer("all-MiniLM-L6-v2")
 
