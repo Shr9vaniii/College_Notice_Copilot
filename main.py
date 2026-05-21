@@ -22,6 +22,7 @@ import tempfile
 from dotenv import load_dotenv
 from cache import r
 from contextlib import asynccontextmanager
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
@@ -64,7 +65,7 @@ async def verify_user(request:Request):
 
 
 
-from fastapi.middleware.cors import CORSMiddleware
+
 
 app.add_middleware(
     CORSMiddleware,
