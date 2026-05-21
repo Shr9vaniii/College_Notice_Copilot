@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form,Depends
+from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form, Depends
 from fastapi.security import HTTPBearer
 from pydantic import BaseModel
 import time
@@ -8,17 +8,14 @@ from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
 import asyncio
 import os
-from pathlib import Path
 from chatbot import question_answer
 from typing import List, Dict
-from ingestion import add_text,process_pdfs
-from fastapi import Depends
+from ingestion import add_text, process_pdfs
 import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import auth
 from firebase_admin import firestore
 import boto3
-import tempfile
 from dotenv import load_dotenv
 from cache import r
 from contextlib import asynccontextmanager
@@ -27,44 +24,42 @@ from fastapi.middleware.cors import CORSMiddleware
 load_dotenv()
 
 s3 = boto3.client(
-    's3',
-    aws_access_key_id=os.getenv('AWS_ACCESS_KEY'),
-    aws_secret_access_key=os.getenv('AWS_SECRET_KEY'),
-    region_name=os.getenv('AWS_REGION')
+    "s3",
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_KEY"),
+    region_name=os.getenv("AWS_REGION"),
 )
 
-s3_bucket_name=os.getenv('S3_BUCKET_NAME')
+s3_bucket_name = os.getenv("S3_BUCKET_NAME")
 
-cred_path=os.getenv('FIREBASE_CREDENTIALS')
+cred_path = os.getenv("FIREBASE_CREDENTIALS")
 cred = credentials.Certificate(cred_path)
 firebase_admin.initialize_app(cred)
 
-db=firestore.client()
+db = firestore.client()
 
 app = FastAPI()
 security = HTTPBearer()
 
-async def verify_user(request:Request):
-    auth_header=request.headers.get("Authorization")
+
+async def verify_user(request: Request):
+    auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         print("errorrrrrrrr")
         raise HTTPException(status_code=401, detail="Unauthorized")
-    token=auth_header.split("Bearer ")[1]
+    token = auth_header.split("Bearer ")[1]
     try:
-        decoded_token=auth.verify_id_token(token)
-        user_id=decoded_token["uid"]
-        user_doc=db.collection("users").document(user_id).get()
+        decoded_token = auth.verify_id_token(token)
+        user_id = decoded_token["uid"]
+        user_doc = db.collection("users").document(user_id).get()
         if not user_doc.exists:
             print("errorrrrrrrr")
             raise HTTPException(status_code=401, detail="Unauthorized")
 
-        user_data=user_doc.to_dict()
+        user_data = user_doc.to_dict()
         return user_data
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
-
-
-
 
 
 app.add_middleware(
@@ -75,40 +70,40 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-limiter=Limiter(key_func=get_remote_address)
-app.state.limiter=limiter
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 
 class QueryRequest(BaseModel):
     question: str
-    history:List[Dict]=[]
+    history: List[Dict] = []
+
 
 @app.post("/student/chat")
-#@limiter.limit("20/second")
-async def query_rag(request:Request,query: QueryRequest,token: str = Depends(security)):
-    user=None
-    
-    start = time.time() 
+# @limiter.limit("20/second")
+async def query_rag(
+    request: Request, query: QueryRequest, token: str = Depends(security)
+):
+    user = None
+
+    start = time.time()
     try:
-        user=await verify_user(request)
+        user = await verify_user(request)
         if user["role"] != "student":
             raise HTTPException(status_code=403, detail="Admins only")
 
-        
-    except Exception as e:
-        raise HTTPException(status_code=401, detail="Unauthorized")    
-
+    except Exception:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     for attempt in range(2):
         try:
-            answer = await question_answer(query.question, query.history,college_name=user["college"])
+            answer = await question_answer(
+                query.question, query.history, college_name=user["college"]
+            )
             end = time.time()
 
-            return {
-                
-                "answer": answer[-1]["content"],
-                "latency": round(end - start, 3)
-            }
+            return {"answer": answer[-1]["content"], "latency": round(end - start, 3)}
 
         except asyncio.CancelledError:
             print("Request cancelled")
@@ -125,42 +120,38 @@ async def query_rag(request:Request,query: QueryRequest,token: str = Depends(sec
                     return {
                         "query": query.query,
                         "answer": "⚠️ LLM busy, try again",
-                        "latency": round(time.time() - start, 3)
+                        "latency": round(time.time() - start, 3),
                     }
 
             else:
                 raise e
 
 
-
 @app.post("/admin/upload")
 async def upload_file(
-    request:Request,
+    request: Request,
     file: UploadFile = File(None),
     text: str = Form(None),
 ):
-    
+
     try:
-        user=await verify_user(request)
+        user = await verify_user(request)
         if user["role"] != "admin":
             raise HTTPException(status_code=403, detail="Admins only")
 
         college_name = user["college"]
 
         if file:
-
-            s3_key=f"{college_name}/{file.filename}"
+            s3_key = f"{college_name}/{file.filename}"
             s3.upload_fileobj(file.file, s3_bucket_name, s3_key)
-            await process_pdfs(s3_key,college_name)
+            await process_pdfs(s3_key, college_name)
             return {"message": "Upload successful", "key": s3_key}
-
 
         if text:
             await asyncio.to_thread(
                 add_text,
                 text,
                 college_name,
-                
             )
             return {"message": "Text added successfully"}
 
@@ -171,6 +162,7 @@ async def upload_file(
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail="Upload failed")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

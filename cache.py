@@ -4,13 +4,12 @@ import json
 import numpy as np
 import os
 from dotenv import load_dotenv
-import chromadb
-from answer_pipeline import client, CollegeChatbot, Result
+from answer_pipeline import CollegeChatbot, Result
 import re
 from sentence_transformers import SentenceTransformer
 
 
-chat=CollegeChatbot()
+chat = CollegeChatbot()
 
 load_dotenv(override=True)
 
@@ -19,11 +18,11 @@ load_dotenv(override=True)
 # =========================
 
 
-
 def deep_clean(value):
-    if not value: 
+    if not value:
         return ""
-    return re.sub(r'\s+', '', value)
+    return re.sub(r"\s+", "", value)
+
 
 REDIS_HOST = deep_clean(os.getenv("REDIS_HOST"))
 REDIS_PORT = deep_clean(os.getenv("REDIS_PORT"))
@@ -32,7 +31,7 @@ REDIS_PASSWORD = deep_clean(os.getenv("REDIS_PASSWORD"))
 # Ensure there is NO space around the colon here
 REDIS_URL = f"redis://default:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}"
 
-print(f"DEBUG: Final URL Check: |{REDIS_URL}|") # The pipes | show if spaces remain
+print(f"DEBUG: Final URL Check: |{REDIS_URL}|")  # The pipes | show if spaces remain
 
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -53,6 +52,7 @@ TOP_K_RERANK = 6
 # =========================
 # UTIL FUNCTIONS
 # =========================
+
 
 def sha1(text: str):
     return hashlib.sha1(text.encode()).hexdigest()
@@ -80,7 +80,6 @@ def get_version(key):
 # =========================
 
 
-
 embed_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
@@ -88,11 +87,10 @@ def embed(text):
     return embed_model.encode(text)
 
 
-
-
 # =========================
 # CACHE FUNCTIONS
 # =========================
+
 
 def get_embedding(question):
 
@@ -137,10 +135,7 @@ def get_retrieval(question, cid):
     # Fetch fresh unranked context using the existing pipeline
     docs = chat.fetch_context_unranked(question, cid)
 
-    payload = [
-        {"page_content": d.page_content, "metadata": d.metadata}
-        for d in docs
-    ]
+    payload = [{"page_content": d.page_content, "metadata": d.metadata} for d in docs]
 
     r.setex(key, RET_TTL, json.dumps(payload))
 
@@ -150,7 +145,6 @@ def get_retrieval(question, cid):
 def get_rerank(question, cid, history):
 
     # Use rewritten query for caching so history-aware semantics are cached
-    
 
     q = normalize(question)
     h = sha1(q)
@@ -173,8 +167,7 @@ def get_rerank(question, cid, history):
     top_docs = chat.fetch_context(cid, question, history)
 
     payload = [
-        {"page_content": d.page_content, "metadata": d.metadata}
-        for d in top_docs
+        {"page_content": d.page_content, "metadata": d.metadata} for d in top_docs
     ]
 
     r.setex(key, RR_TTL, json.dumps(payload))
