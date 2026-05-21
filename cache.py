@@ -20,7 +20,8 @@ load_dotenv(override=True)
 
 
 def deep_clean(value):
-    if not value: return ""
+    if not value: 
+        return ""
     return re.sub(r'\s+', '', value)
 
 REDIS_HOST = deep_clean(os.getenv("REDIS_HOST"))
