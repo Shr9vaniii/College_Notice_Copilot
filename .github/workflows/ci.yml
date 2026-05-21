@@ -22,7 +22,15 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Lint check
+      - name: Install Ruff
+        run: pip install ruff
+
+      - name: Automatically fix formatting and lint errors
         run: |
-          pip install flake8
-          flake8 . --count --max-line-length=120 --ignore=E501,W503 --statistics
+          ruff check --fix .
+          ruff format .
+
+      - name: Commit and Push fixes back to repo
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+         commit_message: "style: auto-fix formatting issues via GitHub Actions"
